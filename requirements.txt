@@ -15,3 +15,5 @@ isort
 mypy
 pre-commit
 mlflow
+fastapi
+uvicorn
