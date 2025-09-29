@@ -47,19 +47,25 @@ conda activate test2-ds
 
 ```rb
 MDI-TestDataScience-2/  
-├─ README.md
-├─ requirements.txt              
-├─ test2-ds.yml           # (optional - conda)
+├── README.md
+├── requirements.txt              
+├── test2-ds.yml           # (optional - conda)
 ├── notebooks/
-│   ├── 01_EDA.ipynb              # Data loading, cleaning, target construction, non-seasonality checks
-│   ├── 02_modeling.ipynb         # Backtesting + final 100-step forecast
-├─ data/
-│  ├─ raw/AirQualityUCI.csv          # raw CSV placed here by user if needed
-│  └─ processed/air_quality_daily.parquet
-├─ reports/
-│  ├─ forecast_100.csv           # 100-step forecast (deltas + reconstructed level)
-│  └─ figures/                   # (optional) figures saved by notebooks
-
+│   ├── 01_EDA.ipynb              # Data loading + cleaning + target construction + non-seasonality checks
+│   ├── 02_modeling.ipynb         # Backtesting + final 100-step forecast + conclusions
+├── data/
+│   ├─ raw/                        # raw CSV placed here by user if needed
+│   └─ processed/
+├── src/                            # src code directory (example only; not required to run for this test)
+├── reports/
+│   ├─ forecast_100.csv           # 100-step forecast (deltas + reconstructed level)
+├── docs/                 # notebooks on HTML
+│   ├── 01_EDA.html             
+│   ├── 02_modeling.html
+├── deployment/           # FastAPI serving endpoints (example only; not required to run for this test)
+│   ├── app.py            
+│   ├── Dockerfile
+│   └── requirements-deploy.txt  
 ```
 
 ## How To Run
@@ -69,33 +75,49 @@ MDI-TestDataScience-2/
 
 To export the HTML notebooks:
 ```bash
-jupyter nbconvert --to html 01_EDA.ipynb 02_modeling.ipynb
+jupyter nbconvert --output-dir "../docs" --to html 01_EDA.ipynb 02_modeling.ipynb
 ```
 
 ## Data Ingestion
 
-The EDA notebook loads the dataset from `data/raw/AirQualityUCI.csv` or from UCI (note that some environments may block outbound connections).  
-- **If offline**, download the CSV from the UCI repository and place it at: `data/raw/AirQualityUCI.csv`.
+The EDA notebook loads the dataset from `data/raw/AirQualityUCI.csv` or from UCI (note that some environments may block outbound connections). **If offline**, download the CSV from the UCI repository and place it at: `data/raw/AirQualityUCI.csv`.
 
-Cleaning steps:
-- Original CSV uses semicolons and decimal commas → parsed accordingly.
-- Missing values indicated with **-200** → converted to `NaN`.
-- Timestamp built from `Date` + `Time`, with an **hourly** frequency; later resampled to **daily means**.
+**Attribute Documentation** 
+- `Date`: (DD/MM/YYYY)
+- `Time`: (HH.MM.SS)
+- `CO(GT)`: True hourly averaged concentration CO in mg/m^3  (reference analyzer).
+- `PT08.S1(CO)`: (tin oxide) hourly averaged sensor response (nominally  CO targeted).
+- `NMHC(GT)`: True hourly averaged overall Non Metanic HydroCarbons concentration in microg/m^3 (reference analyzer).
+- `C6H6(GT)`: True hourly averaged Benzene concentration  in microg/m^3 (reference analyzer).
+- `PT08.S2(NMHC)`: (titania) hourly averaged sensor response (nominally NMHC targeted).
+- `NOx(GT)`: True hourly averaged NOx concentration  in ppb (reference analyzer).
+- `PT08.S3(NOx)`: (tungsten oxide) hourly averaged sensor response (nominally NOx targeted).
+- `NO2(GT)`: True hourly averaged NO2 concentration in microg/m^3 (reference analyzer).
+- `PT08.S4(NO2)`: (tungsten oxide) hourly averaged sensor response (nominally NO2 targeted).
+- `PT08.S5(O3)`: (indium oxide) hourly averaged sensor response (nominally O3 targeted).
+- `T`: Temperature in °C.
+- `RH`: Relative Humidity (%).
+- `AH`: Absolute Humidity.
 
-## Target construction & Non-seasonality verification
 
-- **Target:** `y_nonseasonal = diff(daily_mean(CO_GT))`  
-- **Diagnostics** (in `01_EDA.ipynb`):
-  - **STL** with weekly period → **seasonal strength** near 0 (non-seasonal).  
-  - **Periodogram** → no pronounced weekly peak.  
-  - **Ljung–Box** at lags 7/14/21 → no significant seasonal autocorrelation.
+## Exploratory Data Analysis (notebook `01_EDA.ipynb`)
+- Loads data from `data/raw/AirQualityUCI.csv`or from UCI URL.
+- Cleans:
+  - Original CSV uses semicolons and decimal commas → parsed accordingly.
+  - Missing values indicated with **-200** → converted to `NaN`.
+  - Timestamp built from `Date` + `Time`, with an **hourly** frequency; later resampled to **daily means**.
+- **Target construction & Non-seasonality verification**
+  - **Target:** `y_nonseasonal = diff(daily_mean(CO_GT))`  
+  - **Diagnostics:**
+    - **STL** with weekly period → **seasonal strength** near 0 (non-seasonal).  
+    - **Periodogram** → no pronounced weekly peak.  
+    - **Ljung–Box** at lags 7/14/21 → no significant seasonal autocorrelation.
 
 The EDA stores the processed dataset as `data/processed/air_quality_daily.parquet`.
 
+## Modeling (notebook 02_modeling.ipynb)
 
-## Modeling strategies (constraint: no future exogenous)
-
-### S1 — **Univariate models** (robust)
+### Univariate models (robust)
 - **Baselines:** Naive (last value), Drift.  
 - **ARIMA** (non-seasonal; small grid over (p,d,q)).  
 - **ETS/SES** (trend-only; no seasonal component).  
@@ -103,13 +125,9 @@ The EDA stores the processed dataset as `data/processed/air_quality_daily.parque
 
 > These models **do not use exogenous features**, so the “no future regressors” constraint is naturally satisfied.
 
-### S2 — **Multivariate (optional)** with **forecasted exogenous**
-- Forecast each candidate exogenous series **individually** (e.g., temperature `T`, humidity `RH`, etc.).  
-- Feed those **forecasted** trajectories to SARIMAX / ML as exogenous inputs for the 100-step target forecast.  
-- This **still satisfies** the constraint, as **no ground-truth future exogenous values** are used.
 
 
-## Backtesting protocol & Metrics
+### Backtesting protocol & Metrics
 
 - **Expanding window** cross-validation (`TimeSeriesSplit`) with ~6 folds.  
 - In each fold, models are refit on the training window and evaluated on the hold-out window.  
@@ -119,25 +137,21 @@ The EDA stores the processed dataset as `data/processed/air_quality_daily.parque
   - **MASE** (scale-free; baseline = naive-1).  
 - We **avoid MAPE** since the differenced target can be close to zero.
 
-The modeling notebook aggregates metrics **per model** and selects the **best average MASE** model.
+The notebook aggregates the metrics across folds, plots **boxplots** (stability) and **bar charts** (mean MASE), and selects the **best average MASE** model.
 
-
-## Final 100-step forecast
+### Final 100-step forecast
 
 - Fit the **selected model** on the **full history** of `y_nonseasonal`.  
 - Forecast **100 days** ahead for the **delta target**.  
-- Reconstruct the **level** series (daily CO) by cumulatively adding predicted deltas to the last observed level.  
+- **Reconstruct the level** series (`CO_daily`) by cumulatively adding predicted deltas to the last observed level.  
 - Save outputs to:  
   - `reports/forecast_100.csv` (columns: `y_delta_hat`, `CO_daily_forecast`).
-
-> Figures are displayed inline in the notebook; you may save them under `reports/figures/` if desired.
-
-
 
 
 ## Results and Conclusions 
 
-- The differenced daily CO target behaves **non-seasonally**.  
-- In backtesting, **[fill here: winning model]** shows the best **MASE** across folds.  
-- The **100-day forecast** for CO (level reconstructed from deltas) is **[trend/variance observation here]**.  
-- **Trade-offs:** univariate models are simpler and robust under the constraint; multivariate models can help **only** if exogenous forecasts carry additional signal and are themselves reliable.
+- The differenced daily CO target behaves **non-seasonally** (as established in EDA), so **seasonal** baselines/models are intentionally omitted.
+- In expanding-window backtesting, the notebook prints the **winning model** (lowest mean **MASE**) and its summary table.  
+  > In our reference run, the best performer came from the **ARIMA family** (order selected on the grid; e.g., `ARIMA(0,0,2)`), edging out ETS/SES and the ML-lags approach on mean MASE. If your local run picks a different order, **trust the model name that appears in the notebook summary**.
+- **Forecast behaviour.** On a non-seasonal **difference** target, long-horizon forecasts often **flatten** toward zero; after level reconstruction, the 100-day `CO_daily` path appears **flat to gently trending** from the last observed value—consistent with the data’s short memory.
+
